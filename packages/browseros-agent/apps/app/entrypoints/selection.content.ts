@@ -82,7 +82,12 @@ export default defineContentScript({
       if (txt.length < 8 || !sel || !sel.rangeCount) return
       const r = sel.getRangeAt(0).getBoundingClientRect()
       const explain = mkBtn('Explain this', true)
-      explain.onclick = () => { window.dispatchEvent(new CustomEvent('dojo-guide:explain-selection', { detail: { text: txt.slice(0, 500) } })); hide() }
+      explain.onclick = () => {
+        const d = { text: txt.slice(0, 500) }
+        document.documentElement.setAttribute('data-dojo-guide-event', JSON.stringify({ type: 'dojo-guide:explain-selection', detail: d, ts: Date.now() }))
+        window.dispatchEvent(new CustomEvent('dojo-guide:explain-selection', { detail: d }))
+        hide()
+      }
       const ask = mkBtn('Ask in panel', false)
       ask.onclick = () => { window.dispatchEvent(new Event('dojo-guide:focus-ask')); hide() }
       showAt(r.left, r.bottom + 8, [explain, ask])
@@ -102,7 +107,9 @@ export default defineContentScript({
       const rr = img.getBoundingClientRect()
       const b = mkBtn('Explain this image', true)
       b.onclick = () => {
-        window.dispatchEvent(new CustomEvent('dojo-guide:explain-image', { detail: { alt: img.alt || '', src: img.currentSrc || img.src || '' } }))
+        const d = { alt: img.alt || '', src: img.currentSrc || img.src || '' }
+        document.documentElement.setAttribute('data-dojo-guide-event', JSON.stringify({ type: 'dojo-guide:explain-image', detail: d, ts: Date.now() }))
+        window.dispatchEvent(new CustomEvent('dojo-guide:explain-image', { detail: d }))
         hide()
       }
       showAt(rr.left + 8, rr.top + 8, [b])
