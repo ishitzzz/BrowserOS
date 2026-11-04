@@ -20,11 +20,12 @@ export type GuideMarkStyle = 'highlight' | 'box' | 'underline' | 'circle'
 
 export interface GuideDrawMarkData {
   style: GuideMarkStyle
+  selectionId: number
 }
 
 export interface GuideDrawMarkResult {
   ok: boolean
-  reason?: 'no-selection' | 'stale-range'
+  reason?: 'no-selection' | 'stale-range' | 'selection-changed'
 }
 
 type RuntimeMessagesProtocol = {
@@ -34,7 +35,10 @@ type RuntimeMessagesProtocol = {
     data: GuideDrawMarkData,
   ): GuideDrawMarkResult
   [RuntimeMessageType.guideClearMarks](): void
-  [RuntimeMessageType.guideGetLiveSelection](): { text: string } | null
+  [RuntimeMessageType.guideGetLiveSelection](): {
+    text: string
+    selectionId: number
+  } | null
 }
 
 const { sendMessage, onMessage } =

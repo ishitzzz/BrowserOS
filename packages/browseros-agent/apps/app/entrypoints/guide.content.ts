@@ -24,6 +24,7 @@ const CHIP_ID = 'dojo-guide-mark-chip'
  */
 let savedRange: Range | null = null
 let savedText = ''
+let selectionId = 0
 let lastMarkStyle: GuideMarkStyle = 'highlight'
 
 const captureSelection = () => {
@@ -33,8 +34,18 @@ const captureSelection = () => {
   }
   const range = selection.getRangeAt(0)
   const text = selection.toString()
-  if (!text || !text.trim()) return
+  if (!text?.trim()) return
   try {
+    if (
+      !savedRange ||
+      savedRange.startContainer !== range.startContainer ||
+      savedRange.startOffset !== range.startOffset ||
+      savedRange.endContainer !== range.endContainer ||
+      savedRange.endOffset !== range.endOffset ||
+      savedText !== text
+    ) {
+      selectionId += 1
+    }
     savedRange = range.cloneRange()
     savedText = text
   } catch {
@@ -50,9 +61,9 @@ const onSelectionChange = () => {
 }
 
 const clearMarks = () => {
-  document
-    .querySelectorAll(`[${MARK_ROOT_ATTR}]`)
-    .forEach((node) => node.remove())
+  document.querySelectorAll(`[${MARK_ROOT_ATTR}]`).forEach((node) => {
+    node.remove()
+  })
 }
 
 const rectForRange = (range: Range): DOMRect[] => {
@@ -63,10 +74,24 @@ const rectForRange = (range: Range): DOMRect[] => {
   )
 }
 
-const drawMark = (style: GuideMarkStyle): GuideDrawMarkResult => {
+const drawMark = (
+  style: GuideMarkStyle,
+  expectedSelectionId = selectionId,
+): GuideDrawMarkResult => {
   lastMarkStyle = style
   if (!savedRange || !savedText) {
     return { ok: false, reason: 'no-selection' }
+  }
+  captureSelection()
+  if (selectionId !== expectedSelectionId) {
+    return { ok: false, reason: 'selection-changed' }
+  }
+  if (
+    !savedRange.startContainer.isConnected ||
+    !savedRange.endContainer.isConnected ||
+    savedRange.toString() !== savedText
+  ) {
+    return { ok: false, reason: 'stale-range' }
   }
   let rects: DOMRect[]
   try {
@@ -129,7 +154,7 @@ export default defineContentScript({
     document.addEventListener('selectionchange', onSelectionChange)
 
     onRuntimeMessage(RuntimeMessageType.guideDrawMark, ({ data }) => {
-      return drawMark(data.style)
+      return drawMark(data.style, data.selectionId)
     })
 
     onRuntimeMessage(RuntimeMessageType.guideClearMarks, () => {
@@ -137,7 +162,8 @@ export default defineContentScript({
     })
 
     onRuntimeMessage(RuntimeMessageType.guideGetLiveSelection, () => {
-      return savedText ? { text: savedText } : null
+      captureSelection()
+      return savedText ? { text: savedText, selectionId } : null
     })
 
     // Marks follow the page while its Range stays valid; once the DOM moves

@@ -10,6 +10,7 @@ import {
   selectedTextStorage,
 } from '@/lib/selected-text/selectedTextStorage'
 import { useChatSessionContext } from '@/modules/chat/chat-session-context'
+import { guideErrorText } from './guide-error'
 
 const getMessageText = (message: {
   parts: Array<{ type: string; text?: string }>
@@ -34,8 +35,18 @@ export const Guide: FC = () => {
   const [selection, setSelection] = useState<SelectedTextData | null>(null)
   const [input, setInput] = useState('')
   const [markState, setMarkState] = useState<
-    'idle' | 'drawn' | 'failed' | 'no-selection' | 'stale-range'
+    | 'idle'
+    | 'drawn'
+    | 'failed'
+    | 'no-selection'
+    | 'stale-range'
+    | 'selection-changed'
   >('idle')
+  const askedSelectionRef = useRef<{
+    tabId: number
+    selectionId: number
+  } | null>(null)
+  const preparingRef = useRef(false)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   // This panel belongs to one tab; its selection preview comes from that tab,
@@ -66,32 +77,55 @@ export const Guide: FC = () => {
     previousStatusRef.current = status
     if (!wasBusy || status !== 'ready' || chatError) return
     const last = messages[messages.length - 1]
-    if (!last || last.role !== 'assistant' || !getMessageText(last).trim()) {
+    if (last?.role !== 'assistant' || !getMessageText(last).trim()) {
       return
     }
-    const targetTabId = selection?.tabId ?? panelTabId
-    if (targetTabId === undefined) return
+    const asked = askedSelectionRef.current
+    if (!asked) return
     sendRuntimeMessage(
       RuntimeMessageType.guideDrawMark,
-      { style: 'highlight' },
-      targetTabId,
+      { style: 'highlight', selectionId: asked.selectionId },
+      asked.tabId,
     )
       .then((result) => {
         setMarkState(result?.ok ? 'drawn' : (result?.reason ?? 'failed'))
       })
       .catch(() => setMarkState('failed'))
-    // Only the completion edge matters; selection identity is read at that
-    // moment so a newer selection never gets an older answer's mark.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status])
+  }, [status, messages, chatError])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll on new text
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, status])
 
-  const handleAsk = () => {
+  const handleAsk = async () => {
     const text = input.trim()
-    if (!text) return
+    if (
+      !text ||
+      preparingRef.current ||
+      status === 'submitted' ||
+      status === 'streaming'
+    ) {
+      return
+    }
+    preparingRef.current = true
+    const tabId = selection?.tabId ?? panelTabId
+    askedSelectionRef.current = null
+    if (tabId !== undefined) {
+      try {
+        const live = await sendRuntimeMessage(
+          RuntimeMessageType.guideGetLiveSelection,
+          undefined,
+          tabId,
+        )
+        if (live) {
+          askedSelectionRef.current = { tabId, selectionId: live.selectionId }
+        }
+      } catch {
+        // An unavailable page can still receive an explanation, but no mark.
+      }
+    }
+    preparingRef.current = false
     const sent = sendMessage({ text })
     if (sent) {
       setInput('')
@@ -166,9 +200,8 @@ export const Guide: FC = () => {
         {chatError && !busy && (
           <div className="mb-2 rounded-lg border border-destructive/40 bg-destructive/10 p-2.5 text-xs">
             <div className="mb-1">
-              The guide could not answer:{' '}
-              {chatError.message || 'something went wrong'}. Nothing was marked
-              on the page.
+              The guide could not answer: {guideErrorText(chatError.message)}.
+              Nothing was marked on the page.
             </div>
             <button
               type="button"
@@ -188,7 +221,8 @@ export const Guide: FC = () => {
         )}
         {(markState === 'failed' ||
           markState === 'no-selection' ||
-          markState === 'stale-range') && (
+          markState === 'stale-range' ||
+          markState === 'selection-changed') && (
           <div className="mb-2 text-[11px] text-muted-foreground">
             Could not mark the page - the selection is no longer available
             there. The answer above still stands.
