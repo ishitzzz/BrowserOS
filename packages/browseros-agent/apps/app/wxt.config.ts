@@ -68,6 +68,7 @@ export default defineConfig({
       'bookmarks',
       'history',
       'browserOS',
+      'contextMenus',
       'alarms',
       'webNavigation',
       'downloads',

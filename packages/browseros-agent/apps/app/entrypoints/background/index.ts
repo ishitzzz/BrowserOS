@@ -26,6 +26,20 @@ import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
 import { scheduledJobRuns } from './scheduledJobRuns'
 
+const GUIDE_CONTEXT_MENU_ID = 'dojo-guide-ask'
+
+/** Panel URL that lands on the guide route for one owning tab. */
+const guidePanelPath = (tabId: number) =>
+  `sidepanel.html?tabId=${tabId}#/guide`
+
+const registerGuideContextMenu = () => {
+  chrome.contextMenus.create({
+    id: GUIDE_CONTEXT_MENU_ID,
+    title: 'Ask Dojo Guide',
+    contexts: ['selection'],
+  })
+}
+
 const RETIRED_STORAGE_KEYS = [
   // The unshipped Tool Approvals feature.
   'local:tool-approval-config',
@@ -66,6 +80,32 @@ export default defineBackground(() => {
 
   Capabilities.initialize().catch(() => null)
 
+  chrome.contextMenus.onClicked.addListener((info, tab) => {
+    if (
+      info.menuItemId !== GUIDE_CONTEXT_MENU_ID ||
+      typeof tab?.id !== 'number' ||
+      typeof tab.windowId !== 'number'
+    ) {
+      return
+    }
+    const target = { tabId: tab.id, windowId: tab.windowId }
+    // Register ownership first, then point the tab's panel at the guide
+    // route: openSidePanel would re-prepare the default chat path, so the
+    // guide path is set after preparation and the panel opened directly.
+    void prepareTabSidePanel(target.tabId)
+      .then(() =>
+        chrome.sidePanel.setOptions({
+          tabId: target.tabId,
+          path: guidePanelPath(target.tabId),
+          enabled: true,
+        }),
+      )
+      .then(() =>
+        chrome.sidePanel.browserosToggle({ tabId: target.tabId, open: true }),
+      )
+      .catch(() => undefined)
+  })
+
   scheduledJobRuns()
 
   chrome.action.onClicked.addListener(async (tab) => {
@@ -98,6 +138,7 @@ export default defineBackground(() => {
   })
 
   chrome.runtime.onInstalled.addListener((details) => {
+    registerGuideContextMenu()
     if (details.reason === chrome.runtime.OnInstalledReason.INSTALL) {
       initializeSidePanelOptions().catch(() => null)
     }
