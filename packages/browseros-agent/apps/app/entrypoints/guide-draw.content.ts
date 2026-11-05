@@ -3,8 +3,9 @@
 // box, label, callout, number, highlight...) rendered on the real page. Ported
 // near-verbatim from the dojo-live-search Chrome extension's draw.js + cardslot.js
 // (vendored engine; block anchors that need DojoLesson are no-ops here - plans use
-// viewport-fraction anchors). Parity port; the app shell routes dojo-draw specs
-// from the guide panel to this script.
+// viewport-fraction anchors). Port addition: images containing plan anchors are
+// excluded from the obstacle engine so diagrams can be annotated directly.
+// Parity port; the app shell routes dojo-draw specs from the guide panel to this script.
 import { defineContentScript } from 'wxt/utils/define-content-script'
 
 export default defineContentScript({
@@ -47,7 +48,7 @@ export default defineContentScript({
   const NS = 'http://www.w3.org/2000/svg', OR = '#f28c0f', ID = 'dojo-draw', CID = 'dojo-draw-card';
   let svg = null, card = null, plan = null, i = 0, meta = null, view = null, drawn = [];
   const ph = q => { try { document.documentElement.setAttribute('data-dojo-phase', q); } catch (_) {} };
-  const clear = keep => { ph('idle'); if (!keep && window.DojoCursor) window.DojoCursor.hide(); if (!keep && window.__dojoResume) window.__dojoResume(); [ID, CID].forEach(x => { const e = document.getElementById(x); if (e) e.remove(); }); svg = card = null; drawn = []; };
+  const clear = keep => { ANN = []; ph('idle'); if (!keep && window.DojoCursor) window.DojoCursor.hide(); if (!keep && window.__dojoResume) window.__dojoResume(); [ID, CID].forEach(x => { const e = document.getElementById(x); if (e) e.remove(); }); svg = card = null; drawn = []; };
   function pt(a) {  // anchor -> document coordinates
     if (a.block) { const e = window.DojoLesson && window.DojoLesson.el(a.block); if (!e) return null; const r = e.getBoundingClientRect(), fx = a.fx == null ? 0.5 : a.fx, fy = a.fy == null ? 0.5 : a.fy; return [scrollX + r.left + r.width * fx - (fx <= 0.12 ? 16 : 0), scrollY + r.top + r.height * fy]; }  // a missing fraction means the middle of the block, never NaN
     return [view.sx + a.x * view.w, view.sy + a.y * view.h];
@@ -67,7 +68,8 @@ export default defineContentScript({
   }
 
   // ---- Placement: badges, labels and note boxes are never put over readable text. The model only picks anchors; this code decides where symbols go.
-  let OBST = null, PLACED = [], MARKS = 0, AVOIDIMG = false, STEPSCR = false, MK = [];
+  let OBST = null, PLACED = [], MARKS = 0, AVOIDIMG = false, STEPSCR = false, MK = [], ANN = [];
+  const annImg = b => ANN.some(q => Math.abs(q[0] - b[0]) < 3 && Math.abs(q[1] - b[1]) < 3);  // images being annotated: drawing ON them is the point (port addition)
   // fixed role key (meaning, not shape): [colour for light pages, colour for dark pages]
   const ROLE = { key: ['#a15c00', '#ffd166'], term: ['#6d28d9', '#d0bfff'], example: ['#047857', '#8ce99a'], question: ['#be123c', '#ffa8b8'], link: ['#1d4ed8', '#a5d8ff'], step: ['#a15c00', '#ffd166'] };
   function bgDark(el) { for (let e = el; e; e = e.parentElement) { const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?/.exec(getComputedStyle(e).backgroundColor || ''); if (m && (m[4] === undefined || +m[4] > 0.5)) { const l = (0.2126 * m[1] + 0.7152 * m[2] + 0.0722 * m[3]) / 255; return l < 0.45; } } return false; }
@@ -79,7 +81,7 @@ export default defineContentScript({
   function obstacles() {
     if (OBST) return OBST; OBST = [];
     const lo = scrollY - 100, hi = scrollY + innerHeight + 100;
-    const skip = n => n.parentElement && n.parentElement.closest('#' + ID + ',#' + CID + ',script,style,noscript,#dojo-status,#dojo-cursor');
+    const skip = n => n.parentElement && n.parentElement.closest('#' + ID + ',#' + CID + ',script,style,noscript,#dojo-status,#dojo-cursor,#dojo-guide-tooltip');
     const roots = [document.body];  // text inside open shadow roots is invisible to a plain TreeWalker: collect those roots too
     for (let i = 0; i < roots.length && i < 400; i++) { const el = roots[i]; if (el.querySelectorAll) el.querySelectorAll('*').forEach(e => { if (e.shadowRoot) roots.push(e.shadowRoot); }); }
     const rg = document.createRange(); let count = 0;
@@ -88,7 +90,7 @@ export default defineContentScript({
       while ((n = w.nextNode()) && count < 16000) { rg.selectNodeContents(n); for (const r of rg.getClientRects()) { if (r.width < 2 || r.height < 5) continue; const y = r.top + scrollY; if (y < lo || y > hi) continue; OBST.push([r.left + scrollX, y, r.right + scrollX, r.bottom + scrollY]); count++; } }
       if (count >= 16000) { console.log("dojo obstacle cap hit"); break; }
     }
-    for (const e of document.querySelectorAll('img,picture,video,canvas,svg')) { if (e.closest('#' + ID + ',#' + CID) || (e.closest('svg') && e.tagName !== 'svg')) continue; /* skip only marks INSIDE another svg: a bare img/picture/video has no svg ancestor at all and must be kept */ const r = imgBox(e); if (r.width > 60 && r.height > 60 && r.bottom > 0 && r.top < innerHeight) OBST.push([r.left + scrollX, r.top + scrollY, r.right + scrollX, r.bottom + scrollY, 1]); }  // checker-equivalent: img >60x60 intersecting the viewport, no area cap (a hero image counts too)
+    for (const e of document.querySelectorAll('img,picture,video,canvas,svg')) { if (e.closest('#' + ID + ',#' + CID) || (e.closest('svg') && e.tagName !== 'svg')) continue; /* skip only marks INSIDE another svg: a bare img/picture/video has no svg ancestor at all and must be kept */ const r = imgBox(e); if (r.width > 60 && r.height > 60 && r.bottom > 0 && r.top < innerHeight) { const b_ = [r.left + scrollX, r.top + scrollY, r.right + scrollX, r.bottom + scrollY, 1]; if (!annImg(b_)) OBST.push(b_); } }  // checker-equivalent: img >60x60 intersecting the viewport, no area cap (a hero image counts too)
     for (const e of document.querySelectorAll('iframe,[id^="google_ads"],[class*="sponsor" i],[class*="advert" i],[aria-label*="advert" i],[data-ad],[class*="ad-slot" i],[id*="ad-slot" i]')) { if (e.closest('#' + ID + ',#' + CID)) continue; const r = e.getBoundingClientRect(); if (r.width > 40 && r.height > 20 && r.width * r.height < innerWidth * innerHeight * 0.35) OBST.push([r.left + scrollX, r.top + scrollY, r.right + scrollX, r.bottom + scrollY, 0, 1]); }  // a page-sized wrapper whose class mentions ads is not an ad slot (checker rule)
     return OBST;
   }
@@ -126,6 +128,7 @@ export default defineContentScript({
     for (const x of xs) for (const y of ys) { const m = [x, y], P = [a, m, b], L = plen(P); if (L < bl && L < 3 * Math.hypot(b[0] - a[0], b[1] - a[1]) + 200 && pathHits(P, 3, true) === 0) { bl = L; best = P; } }
     if (best) return best;
     for (const x1 of xs.filter((_, i) => i % 2 === 0)) for (const y1 of ys.filter((_, i) => i % 2 === 0)) for (const m2 of [[x1, b[1]], [a[0], y1]]) { const P = [a, [x1, a[1]], m2, b]; const L = plen(P); if (L < bl && pathHits(P, 3, true) === 0) { bl = L; best = P; } }
+    if (!best) { try { const bad = []; for (const o of obstacles()) { if (o.length !== 4) continue; const x1 = Math.min(a[0], b[0]) - 3, x2 = Math.max(a[0], b[0]) + 3, y1 = Math.min(a[1], b[1]) - 3, y2 = Math.max(a[1], b[1]) + 3; const w = Math.min(x2, o[2]) - Math.max(x1, o[0]), h = Math.min(y2, o[3]) - Math.max(y1, o[1]); if (w > 0 && h > 0) { bad.push(o.map(Math.round).join(',')); if (bad.length >= 4) break; } } drop({ op: 'routedbg' }, 'a=[' + a.map(Math.round) + '] b=[' + b.map(Math.round) + '] view=[' + [view.sx, view.sy, view.w, view.h].map(Math.round) + '] textobst=' + (bad.join(' | ') || 'none')); } catch (_) {} }
     return best;
   }
   function overlapArea(x1, y1, x2, y2) { let s = 0; const pad = 3; for (const o of obstacles()) { if (o[4] && !AVOIDIMG) continue; const w = Math.min(x2 + pad, o[2]) - Math.max(x1 - pad, o[0]), h = Math.min(y2 + pad, o[3]) - Math.max(y1 - pad, o[1]); if (w > 0 && h > 0) s += w * h; } for (const o of PLACED) { const w = Math.min(x2 + 4, o[2]) - Math.max(x1 - 4, o[0]), h = Math.min(y2 + 4, o[3]) - Math.max(y1 - 4, o[1]); if (w > 0 && h > 0) s += w * h * 4; } return s; }
@@ -187,11 +190,11 @@ export default defineContentScript({
     const t = mk('text', { 'data-k': 'note', x, y, 'font-family': 'Arial', 'font-size': 15, 'font-weight': 700, fill: '#241a10', 'paint-order': 'stroke', stroke: '#fff7ec', 'stroke-width': 5, 'text-anchor': 'middle' }); t.textContent = text;
     t.style.opacity = 0; t.style.transition = 'opacity .4s'; g.appendChild(t); setTimeout(() => t.style.opacity = 1, delay);
     try { const w = t.getComputedTextLength() + 8;
-      const IBS = []; for (const im of document.images) { const r0 = imgBox(im); if (r0.width < 60 || r0.height < 60 || r0.bottom < 0 || r0.top > innerHeight) continue; IBS.push([scrollX + r0.left, scrollY + r0.top, scrollX + r0.right, scrollY + r0.bottom]); }
+      const IBS = []; for (const im of document.images) { const r0 = imgBox(im); if (r0.width < 60 || r0.height < 60 || r0.bottom < 0 || r0.top > innerHeight) continue; const b0_ = [scrollX + r0.left, scrollY + r0.top, scrollX + r0.right, scrollY + r0.bottom]; if (!annImg(b0_)) IBS.push(b0_); }
       const ioAt = (cx, cy) => { const nb0 = [cx - w / 2, cy - 10, cx + w / 2, cy + 10], na0 = Math.max(1, w * 20); let m0 = 0; for (const b0 of IBS) { const iw0 = Math.min(nb0[2], b0[2]) - Math.max(nb0[0], b0[0]), ih0 = Math.min(nb0[3], b0[3]) - Math.max(nb0[1], b0[1]); if (iw0 > 0 && ih0 > 0) m0 = Math.max(m0, iw0 * ih0 / na0); } return m0; };  // the search must avoid photos too, not just the post-check: one attempt on a photo-dense page otherwise dies where a clean spot sat 40px away
       const p = free(x, y - 5, w, 20, prefs, false, 320, c => { const nb = [c[0] - w / 2, c[1] - 10, c[0] + w / 2, c[1] + 10], na = Math.max(1, w * 20); let ao = 0; for (const o of obstacles()) { if (!o[5]) continue; const iw = Math.min(nb[2], o[2]) - Math.max(nb[0], o[0]), ih = Math.min(nb[3], o[3]) - Math.max(nb[1], o[1]); if (iw > 0 && ih > 0) ao = Math.max(ao, iw * ih / na); } return ao <= 0.25 && ioAt(c[0], c[1]) <= 0.25; });
       const nb = [p[0] - w / 2, p[1] - 10, p[0] + w / 2, p[1] + 10], na = Math.max(1, (nb[2] - nb[0]) * (nb[3] - nb[1]));
-      let io3 = 0; for (const im of document.images) { const r = imgBox(im); if (r.width < 60 || r.height < 60 || r.bottom < 0 || r.top > innerHeight) continue; const b = [scrollX + r.left, scrollY + r.top, scrollX + r.right, scrollY + r.bottom], iw = Math.min(nb[2], b[2]) - Math.max(nb[0], b[0]), ih = Math.min(nb[3], b[3]) - Math.max(nb[1], b[1]); if (iw > 0 && ih > 0) io3 = Math.max(io3, iw * ih / na); }
+      let io3 = 0; for (const im of document.images) { const r = imgBox(im); if (r.width < 60 || r.height < 60 || r.bottom < 0 || r.top > innerHeight) continue; const b = [scrollX + r.left, scrollY + r.top, scrollX + r.right, scrollY + r.bottom]; if (annImg(b)) continue; const iw = Math.min(nb[2], b[2]) - Math.max(nb[0], b[0]), ih = Math.min(nb[3], b[3]) - Math.max(nb[1], b[1]); if (iw > 0 && ih > 0) io3 = Math.max(io3, iw * ih / na); }
       if (io3 > 0.25) { t.remove(); drop({ op: 'label' }, 'note would sit on a photo'); return null; }  // a note on a photo hides what it should sit beside (note_over_image), whatever AVOIDIMG says
       let tx = 0; for (const o of obstacles()) { if (o.length !== 4) continue; const iw = Math.min(nb[2], o[2]) - Math.max(nb[0], o[0]), ih = Math.min(nb[3], o[3]) - Math.max(nb[1], o[1]); if (iw > 0 && ih > 0) tx += iw * ih; }
       if (tx > 40) { t.remove(); window.__dojoDropped.push({ op: 'label', why: 'no text-free spot for the note near its anchor' }); return null; }  // a note that would sit on text is worse than no note
@@ -344,7 +347,7 @@ export default defineContentScript({
           const t = mk('text', { 'data-k': 'note', 'font-size': 13, 'font-weight': 700, fill: col, stroke: dark ? '#000' : '#fff', 'stroke-width': 3.5, 'paint-order': 'stroke', 'text-anchor': 'middle', 'font-family': 'system-ui,sans-serif' }); t.textContent = txt; g.appendChild(t);
           const w = (t.getComputedTextLength() || 60) + 10, fx = scrollX + first.left, fy = scrollY + first.top;
           const p = free(fx + first.width / 2, fy - 22, w, 20, [[fx + w / 2, fy - 20], [fx + first.width / 2, scrollY + rs[rs.length - 1].bottom + 22], [fx - w / 2 - 14, fy + first.height / 2], [scrollX + Math.max(...rs.map(r => r.right)) + w / 2 + 14, fy + first.height / 2]]);
-          let io2 = 0; const nb = [p[0] - w / 2, p[1] - 10, p[0] + w / 2, p[1] + 10], na = Math.max(1, (nb[2] - nb[0]) * (nb[3] - nb[1])); for (const im of document.images) { const r = imgBox(im); if (r.width < 60 || r.height < 60 || r.bottom < 0 || r.top > innerHeight) continue; const b = [scrollX + r.left, scrollY + r.top, scrollX + r.right, scrollY + r.bottom], iw = Math.min(nb[2], b[2]) - Math.max(nb[0], b[0]), ih = Math.min(nb[3], b[3]) - Math.max(nb[1], b[1]); if (iw > 0 && ih > 0) io2 = Math.max(io2, iw * ih / na); }  // live image rects, checker rule: >25% of the note on any one photo
+          let io2 = 0; const nb = [p[0] - w / 2, p[1] - 10, p[0] + w / 2, p[1] + 10], na = Math.max(1, (nb[2] - nb[0]) * (nb[3] - nb[1])); for (const im of document.images) { const r = imgBox(im); if (r.width < 60 || r.height < 60 || r.bottom < 0 || r.top > innerHeight) continue; const b = [scrollX + r.left, scrollY + r.top, scrollX + r.right, scrollY + r.bottom]; if (annImg(b)) continue; const iw = Math.min(nb[2], b[2]) - Math.max(nb[0], b[0]), ih = Math.min(nb[3], b[3]) - Math.max(nb[1], b[1]); if (iw > 0 && ih > 0) io2 = Math.max(io2, iw * ih / na); }  // live image rects, checker rule: >25% of the note on any one photo
           let ao2 = 0; for (const o of obstacles()) { if (!o[5]) continue; const iw = Math.min(nb[2], o[2]) - Math.max(nb[0], o[0]), ih = Math.min(nb[3], o[3]) - Math.max(nb[1], o[1]); if (iw > 0 && ih > 0) ao2 = Math.max(ao2, iw * ih / na); }  // same rule for ad slots (checker ad_hit measures the whole mark group)
           let nn2 = 0; for (const q of PLACED) { const iw = Math.min(nb[2], q[2]) - Math.max(nb[0], q[0]), ih = Math.min(nb[3], q[3]) - Math.max(nb[1], q[1]); if (iw > 0 && ih > 0) nn2 = Math.max(nn2, iw * ih / na); }  // a second note stacked on a placed one (badge, earlier note) reads as one smudge: keep the underline, drop the note
           if (io2 > 0.25 || ao2 > 0.25 || nn2 > 0.10) {  // a note on a photo or an ad hides what it should sit beside: keep the underline, drop the note. Text overlap is free()'s job to minimise, not a reason to leave a note-less mark
@@ -661,7 +664,14 @@ export default defineContentScript({
     plan.steps.forEach(st => { const g = mk('g', {}); svg.appendChild(g); render(st, g); });
     return new Promise(r => setTimeout(r, 1100));
   }
-  window.DojoDraw = { extrema, series, atX, corners, snap, thousand, preview, start(p, m, v) { clear(true); plan = p; meta = m; view = v; i = 0; try { const cur_ = JSON.parse(document.documentElement.getAttribute('data-dojo-dropped') || '[]'); cur_.push('start: ' + (p.steps||[]).length + ' steps'); document.documentElement.setAttribute('data-dojo-dropped', JSON.stringify(cur_.slice(-12))); } catch (_) {} show(); }, clear, active: () => !!svg };
+  window.DojoDraw = { extrema, series, atX, corners, snap, thousand, preview, start(p, m, v) { clear(true); plan = p; meta = m; view = v; i = 0; try {
+      ANN = []; const ap = [];
+      for (const st of (p.steps || [])) for (const o of (st.ops || [])) {
+        for (const k of ['at', 'from', 'to', 'box']) { const a = o[k]; if (a && !a.block && typeof a.x === 'number' && typeof a.y === 'number') ap.push([v.sx + a.x * v.w, v.sy + a.y * v.h]); }
+        for (const a of (o.points || [])) { if (a && !a.block && typeof a.x === 'number') ap.push([v.sx + a.x * v.w, v.sy + a.y * v.h]); }
+      }
+      if (ap.length) for (const im of document.images) { const r = imgBox(im); if (r.width < 60 || r.height < 60) continue; const b = [scrollX + r.left, scrollY + r.top, scrollX + r.right, scrollY + r.bottom]; if (ap.some(q => q[0] >= b[0] && q[0] <= b[2] && q[1] >= b[1] && q[1] <= b[3])) ANN.push(b); }
+    } catch (_) { ANN = []; } try { const cur_ = JSON.parse(document.documentElement.getAttribute('data-dojo-dropped') || '[]'); cur_.push('start: ' + (p.steps||[]).length + ' steps'); document.documentElement.setAttribute('data-dojo-dropped', JSON.stringify(cur_.slice(-12))); } catch (_) {} show(); }, clear, active: () => !!svg };
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && svg) clear(); });
 })();
 
@@ -674,6 +684,7 @@ export default defineContentScript({
   if (window.__dojoGuideDraw) return;
   window.__dojoGuideDraw = true;
   const run = (plan, meta) => {
+    try { const tip = document.getElementById('dojo-guide-tooltip'); if (tip) tip.remove(); } catch (e) {}
     const DD = window.DojoDraw;
     if (!DD || !plan || !Array.isArray(plan.steps) || !plan.steps.length) return;
     const view = { sx: scrollX, sy: scrollY, w: document.documentElement.clientWidth, h: innerHeight };
