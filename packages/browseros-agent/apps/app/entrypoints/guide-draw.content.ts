@@ -662,7 +662,7 @@
   if (window.__dojoGuideDraw) return;
   window.__dojoGuideDraw = true;
   const run = (plan, meta) => {
-    try { const tip = document.getElementById('dojo-guide-tooltip'); if (tip) tip.remove(); } catch (e) {}
+    try { window.__dojoGuideTooltipSuppress = true; const tip = document.getElementById('dojo-guide-tooltip'); if (tip) tip.remove(); } catch (e) {}
     const DD = window.DojoDraw;
     if (!DD || !plan || !Array.isArray(plan.steps) || !plan.steps.length) return;
     const view = { sx: scrollX, sy: scrollY, w: document.documentElement.clientWidth, h: innerHeight };
