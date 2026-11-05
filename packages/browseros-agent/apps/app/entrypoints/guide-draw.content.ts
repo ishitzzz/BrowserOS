@@ -1,4 +1,35 @@
 // @ts-nocheck
+// Dojo drawing layer: flying cursor + model-planned SVG annotations (arrow, circle,
+// box, label, callout, number, highlight...) rendered on the real page. Ported
+// near-verbatim from the dojo-live-search Chrome extension's draw.js + cardslot.js
+// (vendored engine; block anchors that need DojoLesson are no-ops here - plans use
+// viewport-fraction anchors). Port addition: images containing plan anchors are
+// excluded from the obstacle engine so diagrams can be annotated directly.
+// Parity port; the app shell routes dojo-draw specs from the guide panel to this script.
+import { defineContentScript } from 'wxt/utils/define-content-script'
+
+export default defineContentScript({
+  matches: ['*://*/*'],
+  runAt: 'document_idle',
+  main() {
+// Card slot choice, pure geometry. The rubric fails a mark when the card hides over 30% of THAT mark's own box,
+// so a slot is scored by the worst single op box, not by the union box of the whole step (a small label inside a big union used to be fully hidden).
+(function (root) {
+  function pick(boxes, iw, ih, cw, ch, cw2, ch2) {
+    const area = b => Math.max(1, (b.right - b.left) * (b.bottom - b.top));
+    const ratio = (x, y, w, h) => { let worst = 0; for (const b of boxes) { const ox = Math.max(0, Math.min(b.right, x + w) - Math.max(b.left, x)), oy = Math.max(0, Math.min(b.bottom, y + h) - Math.max(b.top, y)); worst = Math.max(worst, ox * oy / area(b)); } return worst; };
+    const slots = (w, h) => [[iw - 18 - w, ih - 18 - h, 'right', 'bottom'], [18, ih - 18 - h, 'left', 'bottom'], [iw - 18 - w, 18, 'right', 'top'], [18, 18, 'left', 'top'], [(iw - w) / 2, ih - 18 - h, 'center', 'bottom'], [(iw - w) / 2, 18, 'center', 'top']];
+    let best = null, bv = Infinity, small = false;
+    for (const c of slots(cw, ch)) { const v = ratio(c[0], c[1], cw, ch); if (v < bv - 0.001) { bv = v; best = c; } }
+    if (bv > 0.25) { for (const c of slots(cw2, ch2)) { const v = ratio(c[0], c[1], cw2, ch2); if (v < bv - 0.001) { bv = v; best = c; small = true; } } }
+    return { x: best[0], hs: best[2], vs: best[3], worst: bv, small };
+  }
+  // true when box a [l,t,r,b] touches box c [l,t,r,b] grown by pad: a late relocation (label/badge) must never land under the explanation card
+  function hitsCard(a, c, pad) { if (!c) return false; pad = pad || 0; return a[2] > c[0] - pad && a[0] < c[2] + pad && a[3] > c[1] - pad && a[1] < c[3] + pad; }
+  root.DojoCardSlot = { pick, hitsCard };
+  if (typeof module !== 'undefined') module.exports = root.DojoCardSlot;
+})(typeof window !== 'undefined' ? window : globalThis);
+
 // Dojo drawing layer. The platform's model plans the marks; this file only renders them as an SVG overlay, one step at a time.
 (() => {
   if (window !== top || window.DojoDraw) return;
