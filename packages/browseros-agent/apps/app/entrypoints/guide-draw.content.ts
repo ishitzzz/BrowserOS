@@ -1,35 +1,4 @@
 // @ts-nocheck
-// Dojo drawing layer: flying cursor + model-planned SVG annotations (arrow, circle,
-// box, label, callout, number, highlight...) rendered on the real page. Ported
-// near-verbatim from the dojo-live-search Chrome extension's draw.js + cardslot.js
-// (vendored engine; block anchors that need DojoLesson are no-ops here - plans use
-// viewport-fraction anchors). Port addition: images containing plan anchors are
-// excluded from the obstacle engine so diagrams can be annotated directly.
-// Parity port; the app shell routes dojo-draw specs from the guide panel to this script.
-import { defineContentScript } from 'wxt/utils/define-content-script'
-
-export default defineContentScript({
-  matches: ['*://*/*'],
-  runAt: 'document_idle',
-  main() {
-// Card slot choice, pure geometry. The rubric fails a mark when the card hides over 30% of THAT mark's own box,
-// so a slot is scored by the worst single op box, not by the union box of the whole step (a small label inside a big union used to be fully hidden).
-(function (root) {
-  function pick(boxes, iw, ih, cw, ch, cw2, ch2) {
-    const area = b => Math.max(1, (b.right - b.left) * (b.bottom - b.top));
-    const ratio = (x, y, w, h) => { let worst = 0; for (const b of boxes) { const ox = Math.max(0, Math.min(b.right, x + w) - Math.max(b.left, x)), oy = Math.max(0, Math.min(b.bottom, y + h) - Math.max(b.top, y)); worst = Math.max(worst, ox * oy / area(b)); } return worst; };
-    const slots = (w, h) => [[iw - 18 - w, ih - 18 - h, 'right', 'bottom'], [18, ih - 18 - h, 'left', 'bottom'], [iw - 18 - w, 18, 'right', 'top'], [18, 18, 'left', 'top'], [(iw - w) / 2, ih - 18 - h, 'center', 'bottom'], [(iw - w) / 2, 18, 'center', 'top']];
-    let best = null, bv = Infinity, small = false;
-    for (const c of slots(cw, ch)) { const v = ratio(c[0], c[1], cw, ch); if (v < bv - 0.001) { bv = v; best = c; } }
-    if (bv > 0.25) { for (const c of slots(cw2, ch2)) { const v = ratio(c[0], c[1], cw2, ch2); if (v < bv - 0.001) { bv = v; best = c; small = true; } } }
-    return { x: best[0], hs: best[2], vs: best[3], worst: bv, small };
-  }
-  // true when box a [l,t,r,b] touches box c [l,t,r,b] grown by pad: a late relocation (label/badge) must never land under the explanation card
-  function hitsCard(a, c, pad) { if (!c) return false; pad = pad || 0; return a[2] > c[0] - pad && a[0] < c[2] + pad && a[3] > c[1] - pad && a[1] < c[3] + pad; }
-  root.DojoCardSlot = { pick, hitsCard };
-  if (typeof module !== 'undefined') module.exports = root.DojoCardSlot;
-})(typeof window !== 'undefined' ? window : globalThis);
-
 // Dojo drawing layer. The platform's model plans the marks; this file only renders them as an SVG overlay, one step at a time.
 (() => {
   if (window !== top || window.DojoDraw) return;
@@ -90,7 +59,15 @@ export default defineContentScript({
       while ((n = w.nextNode()) && count < 16000) { rg.selectNodeContents(n); for (const r of rg.getClientRects()) { if (r.width < 2 || r.height < 5) continue; const y = r.top + scrollY; if (y < lo || y > hi) continue; OBST.push([r.left + scrollX, y, r.right + scrollX, r.bottom + scrollY]); count++; } }
       if (count >= 16000) { console.log("dojo obstacle cap hit"); break; }
     }
-    for (const e of document.querySelectorAll('img,picture,video,canvas,svg')) { if (e.closest('#' + ID + ',#' + CID) || (e.closest('svg') && e.tagName !== 'svg')) continue; /* skip only marks INSIDE another svg: a bare img/picture/video has no svg ancestor at all and must be kept */ const r = imgBox(e); if (r.width > 60 && r.height > 60 && r.bottom > 0 && r.top < innerHeight) { const b_ = [r.left + scrollX, r.top + scrollY, r.right + scrollX, r.bottom + scrollY, 1]; if (!annImg(b_)) OBST.push(b_); } }  // checker-equivalent: img >60x60 intersecting the viewport, no area cap (a hero image counts too)
+    const IMB = [];
+    for (const e of document.querySelectorAll('img,picture,video,canvas,svg')) { if (e.closest('#' + ID + ',#' + CID) || (e.closest('svg') && e.tagName !== 'svg')) continue; /* skip only marks INSIDE another svg: a bare img/picture/video has no svg ancestor at all and must be kept */ const r = imgBox(e); if (r.width > 60 && r.height > 60 && r.bottom > 0 && r.top < innerHeight) { const b_ = [r.left + scrollX, r.top + scrollY, r.right + scrollX, r.bottom + scrollY, 1]; IMB.push(b_); if (!annImg(b_)) OBST.push(b_); } }
+    // Text you cannot see is not an obstacle: a float/overlay image can sit ON TOP of
+    // laid-out text (Range rects report layout, not z-order). Drop text rects whose
+    // center is covered by an image (port addition - diagram annotation routes over them).
+    if (IMB.length) {
+      const covered = o => { const cx = (o[0] + o[2]) / 2 - scrollX, cy = (o[1] + o[3]) / 2 - scrollY; if (cx < 0 || cy < 0 || cx > innerWidth || cy > innerHeight) return false; const el = document.elementFromPoint(cx, cy); return !!(el && (el.tagName === 'IMG' || el.tagName === 'VIDEO' || el.tagName === 'CANVAS' || (el.closest && el.closest('picture')))); };
+      OBST = OBST.filter(o => { if (o.length !== 4) return true; if (!IMB.some(b => o[0] < b[2] && o[2] > b[0] && o[1] < b[3] && o[3] > b[1])) return true; return !covered(o); });
+    }  // checker-equivalent: img >60x60 intersecting the viewport, no area cap (a hero image counts too)
     for (const e of document.querySelectorAll('iframe,[id^="google_ads"],[class*="sponsor" i],[class*="advert" i],[aria-label*="advert" i],[data-ad],[class*="ad-slot" i],[id*="ad-slot" i]')) { if (e.closest('#' + ID + ',#' + CID)) continue; const r = e.getBoundingClientRect(); if (r.width > 40 && r.height > 20 && r.width * r.height < innerWidth * innerHeight * 0.35) OBST.push([r.left + scrollX, r.top + scrollY, r.right + scrollX, r.bottom + scrollY, 0, 1]); }  // a page-sized wrapper whose class mentions ads is not an ad slot (checker rule)
     return OBST;
   }
@@ -128,7 +105,7 @@ export default defineContentScript({
     for (const x of xs) for (const y of ys) { const m = [x, y], P = [a, m, b], L = plen(P); if (L < bl && L < 3 * Math.hypot(b[0] - a[0], b[1] - a[1]) + 200 && pathHits(P, 3, true) === 0) { bl = L; best = P; } }
     if (best) return best;
     for (const x1 of xs.filter((_, i) => i % 2 === 0)) for (const y1 of ys.filter((_, i) => i % 2 === 0)) for (const m2 of [[x1, b[1]], [a[0], y1]]) { const P = [a, [x1, a[1]], m2, b]; const L = plen(P); if (L < bl && pathHits(P, 3, true) === 0) { bl = L; best = P; } }
-    if (!best) { try { const bad = []; for (const o of obstacles()) { if (o.length !== 4) continue; const x1 = Math.min(a[0], b[0]) - 3, x2 = Math.max(a[0], b[0]) + 3, y1 = Math.min(a[1], b[1]) - 3, y2 = Math.max(a[1], b[1]) + 3; const w = Math.min(x2, o[2]) - Math.max(x1, o[0]), h = Math.min(y2, o[3]) - Math.max(y1, o[1]); if (w > 0 && h > 0) { bad.push(o.map(Math.round).join(',')); if (bad.length >= 4) break; } } drop({ op: 'routedbg' }, 'a=[' + a.map(Math.round) + '] b=[' + b.map(Math.round) + '] view=[' + [view.sx, view.sy, view.w, view.h].map(Math.round) + '] textobst=' + (bad.join(' | ') || 'none')); } catch (_) {} }
+    if (!best) { try { const bad = []; for (const o of obstacles()) { if (o.length !== 4) continue; const x1 = Math.min(a[0], b[0]) - 3, x2 = Math.max(a[0], b[0]) + 3, y1 = Math.min(a[1], b[1]) - 3, y2 = Math.max(a[1], b[1]) + 3; const w = Math.min(x2, o[2]) - Math.max(x1, o[0]), h = Math.min(y2, o[3]) - Math.max(y1, o[1]); if (w > 0 && h > 0) { let who = '?'; try { const el = document.elementFromPoint((o[0] + o[2]) / 2 - scrollX, (o[1] + o[3]) / 2 - scrollY); if (el) who = el.tagName + ':' + String(el.textContent || '').trim().slice(0, 40).replace(/\|/g, '/'); } catch (_) {} bad.push(o.map(Math.round).join(',') + ' {' + who + '}'); if (bad.length >= 4) break; } } drop({ op: 'routedbg' }, 'a=[' + a.map(Math.round) + '] b=[' + b.map(Math.round) + '] view=[' + [view.sx, view.sy, view.w, view.h].map(Math.round) + '] textobst=' + (bad.join(' | ') || 'none')); } catch (_) {} }
     return best;
   }
   function overlapArea(x1, y1, x2, y2) { let s = 0; const pad = 3; for (const o of obstacles()) { if (o[4] && !AVOIDIMG) continue; const w = Math.min(x2 + pad, o[2]) - Math.max(x1 - pad, o[0]), h = Math.min(y2 + pad, o[3]) - Math.max(y1 - pad, o[1]); if (w > 0 && h > 0) s += w * h; } for (const o of PLACED) { const w = Math.min(x2 + 4, o[2]) - Math.max(x1 - 4, o[0]), h = Math.min(y2 + 4, o[3]) - Math.max(y1 - 4, o[1]); if (w > 0 && h > 0) s += w * h * 4; } return s; }
@@ -192,7 +169,9 @@ export default defineContentScript({
     try { const w = t.getComputedTextLength() + 8;
       const IBS = []; for (const im of document.images) { const r0 = imgBox(im); if (r0.width < 60 || r0.height < 60 || r0.bottom < 0 || r0.top > innerHeight) continue; const b0_ = [scrollX + r0.left, scrollY + r0.top, scrollX + r0.right, scrollY + r0.bottom]; if (!annImg(b0_)) IBS.push(b0_); }
       const ioAt = (cx, cy) => { const nb0 = [cx - w / 2, cy - 10, cx + w / 2, cy + 10], na0 = Math.max(1, w * 20); let m0 = 0; for (const b0 of IBS) { const iw0 = Math.min(nb0[2], b0[2]) - Math.max(nb0[0], b0[0]), ih0 = Math.min(nb0[3], b0[3]) - Math.max(nb0[1], b0[1]); if (iw0 > 0 && ih0 > 0) m0 = Math.max(m0, iw0 * ih0 / na0); } return m0; };  // the search must avoid photos too, not just the post-check: one attempt on a photo-dense page otherwise dies where a clean spot sat 40px away
-      const p = free(x, y - 5, w, 20, prefs, false, 320, c => { const nb = [c[0] - w / 2, c[1] - 10, c[0] + w / 2, c[1] + 10], na = Math.max(1, w * 20); let ao = 0; for (const o of obstacles()) { if (!o[5]) continue; const iw = Math.min(nb[2], o[2]) - Math.max(nb[0], o[0]), ih = Math.min(nb[3], o[3]) - Math.max(nb[1], o[1]); if (iw > 0 && ih > 0) ao = Math.max(ao, iw * ih / na); } return ao <= 0.25 && ioAt(c[0], c[1]) <= 0.25; });
+      let dbgN = 0;
+      const p = free(x, y - 5, w, 20, prefs, false, 320, c => { const nb = [c[0] - w / 2, c[1] - 10, c[0] + w / 2, c[1] + 10], na = Math.max(1, w * 20); let ao = 0; for (const o of obstacles()) { if (!o[5]) continue; const iw = Math.min(nb[2], o[2]) - Math.max(nb[0], o[0]), ih = Math.min(nb[3], o[3]) - Math.max(nb[1], o[1]); if (iw > 0 && ih > 0) ao = Math.max(ao, iw * ih / na); } const io = ioAt(c[0], c[1]); const ok = ao <= 0.25 && io <= 0.25; if (!ok && dbgN++ < 3) drop({ op: 'labeldbg' }, 'reject [' + c.map(Math.round) + '] ao=' + ao.toFixed(2) + ' io=' + io.toFixed(2)); return ok; });
+      drop({ op: 'labeldbg' }, 'chose [' + (p ? p.map(Math.round).join(',') : 'null') + '] for "' + String(text).slice(0, 30) + '" at [' + Math.round(x) + ',' + Math.round(y) + '] ANN=' + ANN.length);
       const nb = [p[0] - w / 2, p[1] - 10, p[0] + w / 2, p[1] + 10], na = Math.max(1, (nb[2] - nb[0]) * (nb[3] - nb[1]));
       let io3 = 0; for (const im of document.images) { const r = imgBox(im); if (r.width < 60 || r.height < 60 || r.bottom < 0 || r.top > innerHeight) continue; const b = [scrollX + r.left, scrollY + r.top, scrollX + r.right, scrollY + r.bottom]; if (annImg(b)) continue; const iw = Math.min(nb[2], b[2]) - Math.max(nb[0], b[0]), ih = Math.min(nb[3], b[3]) - Math.max(nb[1], b[1]); if (iw > 0 && ih > 0) io3 = Math.max(io3, iw * ih / na); }
       if (io3 > 0.25) { t.remove(); drop({ op: 'label' }, 'note would sit on a photo'); return null; }  // a note on a photo hides what it should sit beside (note_over_image), whatever AVOIDIMG says
@@ -675,7 +654,6 @@ export default defineContentScript({
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && svg) clear(); });
 })();
 
-
 // Bridge: the guide surface (panel or app shell) sends a planned drawing spec; the
 // layer above draws it on the real page. Two transports: a window event (app shell
 // preload; payload also stashed on the DOM for isolated-world safety) and a runtime
@@ -706,6 +684,5 @@ export default defineContentScript({
     });
   }
 })();
-
   },
 })
